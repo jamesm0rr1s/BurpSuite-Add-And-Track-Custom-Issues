@@ -50,6 +50,8 @@ from javax.swing.text import DocumentFilter # for applying filters on the issue 
 from javax.swing.text import SimpleAttributeSet # for centering text in disabled issue name and severity text panes
 from javax.swing.text import StyleConstants # for centering text in disabled issue name and severity text panes
 from javax.swing.undo import UndoManager # for undo and redo in text areas
+from javax.swing import JPopupMenu
+
 import csv # for importing and exporting to and from csv
 import json # for importing and exporting to and from json
 import os # for splitting the file name and file extension when importing and exporting
@@ -64,6 +66,29 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 	#
 	# implement IBurpExtender when the extension is loaded
 	#
+
+	# Listener for request/response popUp menu
+	# Need to implement all methods since Jython returns NonImplementedError on any not implemented method now
+	class ModifyRequestPopUpListener(MouseListener):
+		def __init__(self, popUpMenu):
+			self.popUp = popUpMenu
+
+		def mouseClicked(self, e):
+			pass
+
+		def mousePressed(self, e):
+			pass
+
+		def mouseEntered(self, e):
+			pass
+
+		def mouseExited(self, e):
+			pass
+
+		def mouseReleased(self, e):
+			if e.getButton() == e.BUTTON3:
+				self.popUp.show(e.getComponent(), e.getX(), e.getY())
+
 
 	def registerExtenderCallbacks(self, callbacks):
 
@@ -122,6 +147,12 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 		self._dictionaryOfButtons = dict()
 		self._dictionaryOfLabels = dict()
 		self._dictionaryOfLastSelectedRowsAndColumns = dict()
+
+		# popup menu for adding new requests/responses
+		menu = JPopupMenu()
+		menu.add(JMenuItem("Add Request/Response", actionPerformed=self.addNewRequestResponseTab))
+		menu.add(JMenuItem("Remove Last Request/Response", actionPerformed=self.removeLastRequestResponseTab))
+		self.popUpListener = self.ModifyRequestPopUpListener(menu)
 
 		# create main extension tab and issue selection tab for popup dialog
 		self.createMainTabOrIssueSelectionTab(self._MAIN_TAB_NAME)
@@ -232,14 +263,56 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 		return
 
 
-	#
-	# create text areas, text panes, scroll panes, and panels
-	#
+	def addNewRequestResponseTab(self, e):
+		self.createAndAddScrollPaneToExistingTabbedPanel("TextArea", "editableY", self._DIALOG_TAB_1_NAME, 6, "Request", self.popUpListener)
+		self.createAndAddScrollPaneToExistingTabbedPanel("TextArea", "editableY", self._DIALOG_TAB_1_NAME, 6, "Response", self.popUpListener)
 
-	def createTextAndScrollPaneAndPanel(self, textType, editable, tabName, rowHeight, shortName):
+
+	def removeLastRequestResponseTab(self, e):
+		self.removeScrollPaneFromExistingTabbedPanel(self._DIALOG_TAB_1_NAME, "Request")
+		self.removeScrollPaneFromExistingTabbedPanel(self._DIALOG_TAB_1_NAME, "Response")
+
+
+	def removeScrollPaneFromExistingTabbedPanel(self, tabName, shortName):
+		longName = tabName + " " + shortName
+
+		tabPane = self._dictionaryOfPanels[longName].getComponents()[0]
+
+		if tabPane.getTabCount() > 1:
+			tabPane.remove(tabPane.getTabCount() - 1)
+
+		return
+
+
+	def createAndAddScrollPaneToExistingTabbedPanel(self, textType, editable, tabName, rowHeight, shortName, popUpListener = None):
+		longName = tabName + " " + shortName
+
+		tabPane = self._dictionaryOfPanels[longName].getComponents()[0]
+
+		nextShortName = shortName + " " + str(tabPane.getTabCount() + 1)
+		nextLongName = tabName + " " + nextShortName
+
+		self.createTextAndScrollPane(textType, editable, nextLongName, rowHeight, nextShortName, popUpListener)
+		tabPane.addTab(nextShortName, self._dictionaryOfScrollPanes[nextLongName])
+
+		return
+
+
+	def createTextAndScrollPaneAndPanel(self, textType, editable, tabName, rowHeight, shortName, tabbed = False, popUpListener = None):
 
 		# create unique name for dictionary items
 		longName = tabName + " " + shortName
+
+		self.createTextAndScrollPane(textType, editable, longName, rowHeight, shortName, popUpListener)
+		self.addScrollPaneToPanel(shortName, longName, tabbed)
+		# return
+		return
+
+
+	#
+	# create text areas, text panes and scroll panes
+	#
+	def createTextAndScrollPane(self, textType, editable, longName, rowHeight, shortName, popUpListener):
 
 		# check if the type is a text area
 		if textType == "TextArea":
@@ -267,12 +340,11 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 			# check if port
 			if shortName == "Port":
 
-				# set default port to 443 to match default protocol of https 
+				# set default port to 443 to match default protocol of https
 				self._dictionaryOfTextAreas[longName].setText("443")
 
 			# check if issue name, port, host, or path
 			if shortName == "Issue Name" or shortName == "Port" or shortName == "Host" or shortName == "Path":
-
 				# disable newlines
 				self._dictionaryOfTextAreas[longName].getDocument().putProperty("filterNewlines", True)
 
@@ -305,6 +377,9 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 				# allow undo and redo for changes to the text
 				self.createUndoRedo(longName)
 
+			if popUpListener is not None:
+				self._dictionaryOfTextAreas[longName].addMouseListener(popUpListener)
+
 		# check if the type is a text pane
 		elif textType == "TextPane":
 
@@ -315,7 +390,8 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 			self._dictionaryOfTextPanes[longName].setContentType("text/html")
 
 			# set text in text pane
-			self._dictionaryOfTextPanes[longName].setText(self._HTML_FOR_TEXT_PANES[0] + "&nbsp" + self._HTML_FOR_TEXT_PANES[1])
+			self._dictionaryOfTextPanes[longName].setText(
+				self._HTML_FOR_TEXT_PANES[0] + "&nbsp" + self._HTML_FOR_TEXT_PANES[1])
 
 			# remove default white border
 			self._dictionaryOfTextPanes[longName].setBorder(BorderFactory.createEmptyBorder())
@@ -332,19 +408,35 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 				# set disabled background color
 				self._dictionaryOfTextPanes[longName].setBackground(self._DISABLED_BACKGROUND_COLOR)
 
+		# return
+		return
+
+
+	#
+	# create panel and add existing scroll pane
+	#
+
+	def addScrollPaneToPanel(self, shortName, longName, tabbed):
 		# create panels
 		self._dictionaryOfPanels[longName] = JPanel()
 
 		# set border for panels
-		self._dictionaryOfPanels[longName].setBorder(BorderFactory.createTitledBorder(BorderFactory.createLineBorder(Color.BLACK, 1, False), shortName, TitledBorder.CENTER, TitledBorder.TOP))
+		self._dictionaryOfPanels[longName].setBorder(
+			BorderFactory.createTitledBorder(BorderFactory.createLineBorder(Color.BLACK, 1, False), shortName,
+											 TitledBorder.CENTER, TitledBorder.TOP))
 
 		# set layout for panels
 		self._dictionaryOfPanels[longName].setLayout(BorderLayout())
 
-		# add scroll panes to panels
-		self._dictionaryOfPanels[longName].add(self._dictionaryOfScrollPanes[longName])
+		if tabbed:
+			self.tabPane = JTabbedPane()
+			self.tabPane.addTab(shortName, self._dictionaryOfScrollPanes[longName])
 
-		# return
+			self._dictionaryOfPanels[longName].add(self.tabPane)
+		else:
+			# add scroll panes to panels
+			self._dictionaryOfPanels[longName].add(self._dictionaryOfScrollPanes[longName])
+
 		return
 
 
@@ -442,7 +534,7 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 	#
 	# create labels warning that the table has changed since the last export
 	#
- 
+
 	def createWarningLabel(self, tabName, labelNumber):
 
 		# create label setting text to blank since hiding label does not consume the space
@@ -734,8 +826,8 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 		self.createTextAndScrollPaneAndPanel("TextArea", "editableY", tabName, 4, "Issue Background")
 		self.createTextAndScrollPaneAndPanel("TextArea", "editableY", tabName, 4, "Remediation Detail")
 		self.createTextAndScrollPaneAndPanel("TextArea", "editableY", tabName, 4, "Remediation Background")
-		self.createTextAndScrollPaneAndPanel("TextArea", "editableY", tabName, 6, "Request")
-		self.createTextAndScrollPaneAndPanel("TextArea", "editableY", tabName, 6, "Response")
+		self.createTextAndScrollPaneAndPanel("TextArea", "editableY", tabName, 6, "Request", True, self.popUpListener)
+		self.createTextAndScrollPaneAndPanel("TextArea", "editableY", tabName, 6, "Response", True, self.popUpListener)
 
 		# create combo boxes and panels for main tab
 		self.createComboBoxAndPanel(tabName, "Severity")
@@ -1137,8 +1229,16 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 		issueBackground = self._dictionaryOfTextAreas[self._DIALOG_TAB_1_NAME + " Issue Background"].getText()
 		remediationDetail = self._dictionaryOfTextAreas[self._DIALOG_TAB_1_NAME + " Remediation Detail"].getText()
 		remediationBackground = self._dictionaryOfTextAreas[self._DIALOG_TAB_1_NAME + " Remediation Background"].getText()
-		request = self._dictionaryOfTextAreas[self._DIALOG_TAB_1_NAME + " Request"].getText()
-		response = self._dictionaryOfTextAreas[self._DIALOG_TAB_1_NAME + " Response"].getText()
+
+		requests = []
+		responses = []
+
+		responseTabPane = self._dictionaryOfPanels[self._DIALOG_TAB_1_NAME + " Response"].getComponent(0)
+		requestTabPane = self._dictionaryOfPanels[self._DIALOG_TAB_1_NAME + " Request"].getComponent(0)
+
+		for requestPane, responsePane in zip(requestTabPane.getComponents(), responseTabPane.getComponents()):
+			requests.append(requestPane.getViewport().getView().getText())
+			responses.append(responsePane.getViewport().getView().getText())
 
 		# check if there is a value in the port field
 		if port != "":
@@ -1229,7 +1329,9 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 		highlight = None
 
 		# create array of http messages
-		httpMessages = [CustomIHttpRequestResponse(comment, highlight, httpService, request, response)]
+		httpMessages = []
+		for request, response in zip(requests, responses):
+			httpMessages.append(CustomIHttpRequestResponse(comment, highlight, httpService, request, response))
 
 		# create url
 		url = URL(protocol + "://" + host + ":" + unicode(port) + path)
@@ -1684,7 +1786,7 @@ class BurpExtender(IBurpExtender, ITab, IContextMenuFactory):
 	def makeAddIssueDialogVisible(self):
 
 		# change focus to the add issue tab
-	 	self._tabbedPaneDialog.setSelectedIndex(0)
+		self._tabbedPaneDialog.setSelectedIndex(0)
 
 		# make the dialog box visible in case the click is coming from the main tab
 		self._dialogAddIssue.setVisible(True)
